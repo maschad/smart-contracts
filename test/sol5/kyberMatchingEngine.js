@@ -232,6 +232,21 @@ contract('KyberMatchingEngine', function(accounts) {
         before("deploy and setup matchingEngine instance", async() => {
             matchingEngine = await KyberMatchingEngine.new(admin);
         });
+
+        it("should revert if negligbleRateDiffBps > BPS", async() => {
+            await matchingEngine.setNetworkContract(network, {from: admin});
+            await expectRevert(
+                matchingEngine.setNegligbleRateDiffBps(BPS.add(new BN(1)), {from: network}),
+                "rateDiffBps > BPS"
+            );
+        });
+
+        it("should revert setting zero address for network", async() => {
+            await expectRevert(
+                matchingEngine.setNetworkContract(zeroAddress, {from: admin}),
+                "network 0"
+            );
+        });
     });
 
     describe("test adding reserves", async() => {
@@ -337,6 +352,10 @@ contract('KyberMatchingEngine', function(accounts) {
             token = await TestToken.new("test", "tst", 18);
         });
 
+        beforeEach("delist token pair on both sides", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, false, {from: network});
+        });
+
         it("should revert when listing token for non-reserve", async() => {
             await expectRevert(
                 matchingEngine.listPairForReserve(user, token.address, true, true, true, {from: network}),
@@ -358,7 +377,74 @@ contract('KyberMatchingEngine', function(accounts) {
 
             //reset
             await matchingEngine.addReserve(reserve.address, reserve.reserveId, reserve.onChainType, {from: network});
-        })
+        });
+
+        it("should list T2E side only", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, false, true, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result.length, zeroBN, "E2T should not be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result[0], reserve.address, "T2E should be listed");
+        });
+
+        it("should list E2T side only", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, false, true, true, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result[0], reserve.address, "E2T should be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result.length, zeroBN, "T2E should not be listed");
+        });
+
+        it("should list both T2E and E2T", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result[0], reserve.address, "T2E should be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result[0], reserve.address, "E2T should be listed");
+        });
+
+        it("should delist T2E side only", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            await matchingEngine.listPairForReserve(reserve.address, token.address, false, true, false, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result.length, zeroBN, "E2T should not be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result[0], reserve.address, "T2E should be listed");
+        });
+
+        it("should delist E2T side only", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, false, false, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result[0], reserve.address, "E2T should be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result.length, zeroBN, "T2E should not be listed");
+        });
+
+        it("should delist both T2E and E2T", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, false, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result.length, zeroBN, "E2T should not be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result.length, zeroBN, "T2E should not be listed");
+        });
+
+        it("should do nothing for listing twice", async() => {
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            await matchingEngine.listPairForReserve(reserve.address, token.address, true, true, true, {from: network});
+            let result = await matchingEngine.getReservesPerTokenSrc(token.address);
+            Helper.assertEqual(result[0], reserve.address, "E2T should be listed");
+
+            result = await matchingEngine.getReservesPerTokenDest(token.address);
+            Helper.assertEqual(result[0], reserve.address, "T2E should be listed");
+        });
     });
 
     describe("test fee paying data per reserve", async() => {
@@ -377,7 +463,7 @@ contract('KyberMatchingEngine', function(accounts) {
             //init token
             token = await TestToken.new("Token", "TOK", 18);
             
-            result = await nwHelper.setupReserves(network, [token], totalReserveTypes,0,0,0, accounts, admin, operator);
+            result = await nwHelper.setupReserves(network, [token], totalReserveTypes, 0, 0, 0, accounts, admin, operator);
             reserveInstances = result.reserveInstances;
             
             //add reserves for all types.
